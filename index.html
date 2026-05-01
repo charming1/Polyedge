@@ -52,6 +52,7 @@ function App() {
   const [error, setError] = useState("");
   const [lastUpdated, setLastUpdated] = useState(null);
   const [checkingResults, setCheckingResults] = useState(false);
+  const [aiProvider, setAiProvider] = useState("");
 
   const globalStats = (() => {
     const resolved = history.filter(h => h.result !== "pending");
@@ -114,6 +115,7 @@ function App() {
       const data = await res.json();
       if (!data.markets?.length) throw new Error("No markets returned");
       setMarkets(data.markets);
+      setAiProvider(data.aiUsed || "");
       setLastUpdated(new Date());
       const existingIds = new Set(history.map(h => h.id));
       const newEntries = data.markets
@@ -195,12 +197,12 @@ function App() {
           <div style={{ textAlign: "center", padding: "20px 0" }}>
             <div className="spinner"/>
             <div style={{ fontSize: 11, color: "#a78bfa", letterSpacing: 1, marginBottom: 6 }}>{loadingMsg}</div>
-            <div style={{ fontSize: 10, color: "#6b6b8a" }}>Claude is searching news & cross-referencing data...</div>
-            <div style={{ fontSize: 10, color: "#6b6b8a", marginTop: 4 }}>This takes 20-40 seconds</div>
+            <div style={{ fontSize: 10, color: "#6b6b8a" }}>Groq (Llama 3.3) → Gemini fallback</div>
+            <div style={{ fontSize: 10, color: "#6b6b8a", marginTop: 4 }}>This takes 10-20 seconds</div>
           </div>
         )}
 
-        {lastUpdated && !loading && <div style={{ textAlign: "center", fontSize: 10, color: "#6b6b8a", marginBottom: 12 }}>AI analyzed at {lastUpdated.toLocaleTimeString()} · {filtered.length} markets</div>}
+        {lastUpdated && !loading && <div style={{ textAlign: "center", fontSize: 10, color: "#6b6b8a", marginBottom: 12 }}>Analyzed at {lastUpdated.toLocaleTimeString()} · {filtered.length} markets · {aiProvider && <span style={{color:"#a78bfa"}}>via {aiProvider}</span>}</div>}
 
         {error && <div style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 12, padding: 16, textAlign: "center", marginBottom: 14, color: "#ef4444", fontSize: 12, lineHeight: 1.7 }}>⚠️ {error}</div>}
 
