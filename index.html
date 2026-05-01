@@ -11,14 +11,11 @@
 <style>
   *{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
   body{background:#080810;color:#e8e8f0;font-family:'DM Mono',monospace;min-height:100vh;}
-  body::before{
-    content:'';position:fixed;inset:0;z-index:0;
-    background-image:linear-gradient(rgba(0,255,148,0.025) 1px,transparent 1px),linear-gradient(90deg,rgba(0,255,148,0.025) 1px,transparent 1px);
-    background-size:36px 36px;pointer-events:none;
-  }
+  body::before{content:'';position:fixed;inset:0;z-index:0;background-image:linear-gradient(rgba(0,255,148,0.025) 1px,transparent 1px),linear-gradient(90deg,rgba(0,255,148,0.025) 1px,transparent 1px);background-size:36px 36px;pointer-events:none;}
   #root{position:relative;z-index:1;}
   @keyframes fadeUp{from{opacity:0;transform:translateY(14px);}to{opacity:1;transform:translateY(0);}}
   @keyframes spin{to{transform:rotate(360deg);}}
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:0.4;}}
   .spinner{width:36px;height:36px;border:2px solid #2a2a3d;border-top-color:#00ff94;border-radius:50%;animation:spin 0.8s linear infinite;margin:0 auto 14px;}
   ::-webkit-scrollbar{width:4px;} ::-webkit-scrollbar-track{background:#0a0a0f;} ::-webkit-scrollbar-thumb{background:#2a2a3d;border-radius:4px;}
 </style>
@@ -28,85 +25,21 @@
 <script type="text/babel">
 const { useState, useEffect, useCallback } = React;
 
-// Uses our own Netlify function — no CORS issues ever
-async function fetchMarkets() {
-  const res = await fetch("/.netlify/functions/markets", {
-    signal: AbortSignal.timeout(15000)
-  });
-  if (!res.ok) throw new Error(`Server error ${res.status} — function may still be deploying, try again in 1 minute`);
-  return await res.json();
+const STORAGE_KEY = "polyedge-ai-history-v1";
+function loadHistory() { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch { return []; } }
+function saveHistory(h) { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(h)); } catch {} }
+
+function getScoreLabel(score) {
+  if (score >= 80) return { text: "Strong", color: "#00ff94" };
+  if (score >= 60) return { text: "Good", color: "#22d3ee" };
+  if (score >= 40) return { text: "Moderate", color: "#f59e0b" };
+  return { text: "Weak", color: "#6b6b8a" };
 }
 
-async function fetchMarketBySlug(slug) {
-  try {
-    const res = await fetch(`/.netlify/functions/markets?slug=${encodeURIComponent(slug)}`, {
-      signal: AbortSignal.timeout(10000)
-    });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return Array.isArray(data) ? data[0] : data;
-  } catch { return null; }
-}
-
-function analyzeMarket(m) {
-  try {
-    const prices = JSON.parse(m.outcomePrices || "[0.5,0.5]").map(Number);
-    const labels = JSON.parse(m.outcomes || '["Yes","No"]');
-    const bestIdx = prices.indexOf(Math.max(...prices));
-    const bestPrice = prices[bestIdx];
-    const bestOutcome = labels[bestIdx];
-
-    let score = 0;
-    const flags = [];
-
-    if (bestPrice >= 0.90) { score += 45; flags.push(`${Math.round(bestPrice*100)}% confidence`); }
-    else if (bestPrice >= 0.80) { score += 35; flags.push(`${Math.round(bestPrice*100)}% confidence`); }
-    else if (bestPrice >= 0.70) { score += 22; flags.push(`${Math.round(bestPrice*100)}% confidence`); }
-    else if (bestPrice >= 0.60) { score += 10; flags.push(`${Math.round(bestPrice*100)}% confidence`); }
-
-    const vol = parseFloat(m.volume || 0);
-    if (vol > 1000000) { score += 25; flags.push(`$${(vol/1000000).toFixed(1)}M vol`); }
-    else if (vol > 500000) { score += 20; flags.push(`$${(vol/1000).toFixed(0)}k vol`); }
-    else if (vol > 100000) { score += 12; flags.push(`$${(vol/1000).toFixed(0)}k vol`); }
-    else if (vol > 10000) { score += 5; flags.push(`$${(vol/1000).toFixed(0)}k vol`); }
-
-    const liq = parseFloat(m.liquidity || 0);
-    if (liq > 100000) { score += 15; flags.push(`$${(liq/1000).toFixed(0)}k liq`); }
-    else if (liq > 20000) { score += 8; flags.push(`$${(liq/1000).toFixed(0)}k liq`); }
-
-    if (m.endDate) {
-      const days = Math.round((new Date(m.endDate) - new Date()) / 86400000);
-      if (days >= 0 && days <= 2) { score += 15; flags.push(`closes in ${days}d`); }
-      else if (days <= 7) { score += 8; flags.push(`closes in ${days}d`); }
-      else if (days > 0) flags.push(`${days}d left`);
-    }
-
-    if (score < 30) return null;
-    return {
-      id: m.id || m.slug,
-      question: m.question,
-      bestOutcome,
-      probability: Math.round(bestPrice * 100),
-      score: Math.min(score, 100),
-      flags,
-      slug: m.slug || "",
-      endDate: m.endDate,
-    };
-  } catch { return null; }
-}
-
-function getLabel(score) {
-  if (score >= 80) return { text: "Strong", cls: "strong", color: "#00ff94" };
-  if (score >= 55) return { text: "Good", cls: "good", color: "#22d3ee" };
-  return { text: "Moderate", cls: "moderate", color: "#f59e0b" };
-}
-
-const STORAGE_KEY = "polyedge-history-v2";
-function loadHistory() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch { return []; }
-}
-function saveHistory(h) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(h)); } catch {}
+function getEdgeLabel(edgeType, edge) {
+  if (edgeType === "fade") return { text: "⚡ Fade Crowd", color: "#ec4899", bg: "rgba(236,72,153,0.1)", border: "rgba(236,72,153,0.3)" };
+  if (edgeType === "value") return { text: "💎 Value Bet", color: "#f59e0b", bg: "rgba(245,158,11,0.1)", border: "rgba(245,158,11,0.3)" };
+  return { text: "✓ Confirms Crowd", color: "#00ff94", bg: "rgba(0,255,148,0.1)", border: "rgba(0,255,148,0.3)" };
 }
 
 function App() {
@@ -120,7 +53,7 @@ function App() {
   const [lastUpdated, setLastUpdated] = useState(null);
   const [checkingResults, setCheckingResults] = useState(false);
 
-  const stats = (() => {
+  const globalStats = (() => {
     const resolved = history.filter(h => h.result !== "pending");
     const won = resolved.filter(h => h.result === "won").length;
     const lost = resolved.filter(h => h.result === "lost").length;
@@ -135,7 +68,10 @@ function App() {
     let updated = [...hist];
     for (const item of pending) {
       try {
-        const market = await fetchMarketBySlug(item.slug);
+        const res = await fetch(`/.netlify/functions/markets?slug=${encodeURIComponent(item.slug)}`);
+        if (!res.ok) continue;
+        const data = await res.json();
+        const market = Array.isArray(data) ? data[0] : data;
         if (!market || (!market.closed && !market.resolved)) continue;
         let winner = null;
         try {
@@ -145,7 +81,7 @@ function App() {
           if (winIdx >= 0) winner = labels[winIdx];
         } catch {}
         if (winner) {
-          const result = winner.toLowerCase() === item.bestOutcome.toLowerCase() ? "won" : "lost";
+          const result = winner.toLowerCase() === item.myFavorite.toLowerCase() ? "won" : "lost";
           updated = updated.map(h => h.id === item.id ? { ...h, result, resolvedAt: new Date().toISOString(), winner } : h);
         }
       } catch {}
@@ -156,10 +92,7 @@ function App() {
 
   useEffect(() => {
     if (history.length > 0) {
-      checkPendingResults(history).then(updated => {
-        setHistory(updated);
-        saveHistory(updated);
-      });
+      checkPendingResults(history).then(updated => { setHistory(updated); saveHistory(updated); });
     }
   }, []);
 
@@ -168,16 +101,24 @@ function App() {
     setError("");
     setMarkets([]);
     try {
-      setLoadingMsg("Connecting to Polymarket...");
-      const data = await fetchMarkets();
-      setLoadingMsg(`Analyzing ${data.length} markets...`);
-      await new Promise(r => setTimeout(r, 200));
-      const results = data.map(analyzeMarket).filter(Boolean);
-      results.sort((a, b) => b.score - a.score);
-      setMarkets(results);
+      setLoadingMsg("Fetching live markets...");
+      await new Promise(r => setTimeout(r, 300));
+      setLoadingMsg("AI searching news & analyzing...");
+      const res = await fetch("/.netlify/functions/markets?analyze=true", {
+        signal: AbortSignal.timeout(60000)
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || `Server error ${res.status}`);
+      }
+      const data = await res.json();
+      if (!data.markets?.length) throw new Error("No markets returned");
+      setMarkets(data.markets);
       setLastUpdated(new Date());
       const existingIds = new Set(history.map(h => h.id));
-      const newEntries = results.filter(r => !existingIds.has(r.id)).map(r => ({ ...r, scannedAt: new Date().toISOString(), result: "pending" }));
+      const newEntries = data.markets
+        .filter(m => !existingIds.has(m.slug))
+        .map(m => ({ ...m, id: m.slug, scannedAt: new Date().toISOString(), result: "pending" }));
       if (newEntries.length) {
         const updated = [...newEntries, ...history].slice(0, 200);
         setHistory(updated);
@@ -187,39 +128,39 @@ function App() {
     setLoading(false);
   };
 
-  const clearHistory = () => {
-    if (window.confirm("Clear all history?")) { setHistory([]); saveHistory([]); }
-  };
-
-  const filtered = filter === "all" ? markets : markets.filter(m => getLabel(m.score).cls === filter);
+  const filtered = filter === "all" ? markets
+    : filter === "fade" ? markets.filter(m => m.edgeType === "fade")
+    : filter === "value" ? markets.filter(m => m.edgeType === "value")
+    : markets.filter(m => m.score >= 70);
 
   const S = {
-    card: (c) => ({ background: "#12121a", border: "1px solid #2a2a3d", borderLeft: `3px solid ${c}`, borderRadius: 12, padding: 14 }),
-    surface2: { background: "#1a1a26", borderRadius: 7, padding: "8px 10px", marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" },
-    tag: (c) => ({ fontSize: 9, padding: "2px 9px", background: `${c}18`, border: `1px solid ${c}44`, borderRadius: 20, color: c, letterSpacing: 1, textTransform: "uppercase", fontWeight: 600 }),
-    signal: { fontSize: 9, padding: "2px 7px", background: "rgba(124,58,237,0.1)", border: "1px solid rgba(124,58,237,0.2)", borderRadius: 20, color: "#a78bfa" },
+    wrap: { maxWidth: 480, margin: "0 auto", padding: "20px 14px" },
+    surface: { background: "#12121a", border: "1px solid #2a2a3d", borderRadius: 12 },
+    tag: (c) => ({ fontSize: 9, padding: "2px 9px", background: `${c}18`, border: `1px solid ${c}44`, borderRadius: 20, color: c, letterSpacing: 1, textTransform: "uppercase", fontWeight: 600, whiteSpace: "nowrap" }),
+    btn: (a, ac="#00ff94") => ({ flex: 1, padding: "7px 4px", background: a ? `${ac}0f` : "#12121a", border: `1px solid ${a ? ac : "#2a2a3d"}`, color: a ? ac : "#6b6b8a", fontFamily: "DM Mono,monospace", fontSize: 9, letterSpacing: 1, textTransform: "uppercase", borderRadius: 8, cursor: "pointer" }),
+    tab: (a) => ({ flex: 1, padding: 10, border: `1px solid ${a ? "#7c3aed" : "#2a2a3d"}`, background: a ? "rgba(124,58,237,0.1)" : "#12121a", color: a ? "#a78bfa" : "#6b6b8a", fontFamily: "DM Mono,monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 8, cursor: "pointer" }),
     link: { display: "block", textAlign: "center", padding: 7, border: "1px solid #2a2a3d", borderRadius: 7, color: "#6b6b8a", fontSize: 10, textDecoration: "none", letterSpacing: 1, textTransform: "uppercase" },
-    btn: (active) => ({ flex: 1, padding: "7px 4px", background: active ? "rgba(0,255,148,0.06)" : "#12121a", border: `1px solid ${active ? "#00ff94" : "#2a2a3d"}`, color: active ? "#00ff94" : "#6b6b8a", fontFamily: "DM Mono,monospace", fontSize: 9, letterSpacing: 1, textTransform: "uppercase", borderRadius: 8, cursor: "pointer" }),
-    tab: (active) => ({ flex: 1, padding: 10, border: `1px solid ${active ? "#7c3aed" : "#2a2a3d"}`, background: active ? "rgba(124,58,237,0.1)" : "#12121a", color: active ? "#a78bfa" : "#6b6b8a", fontFamily: "DM Mono,monospace", fontSize: 11, letterSpacing: 2, textTransform: "uppercase", borderRadius: 8, cursor: "pointer" }),
   };
 
   return (
-    <div style={{ maxWidth: 480, margin: "0 auto", padding: "20px 14px" }}>
+    <div style={S.wrap}>
 
       {/* Header */}
-      <div style={{ textAlign: "center", marginBottom: 22 }}>
-        <span style={{ fontFamily: "Syne,sans-serif", fontSize: 30, fontWeight: 800, letterSpacing: -1, background: "linear-gradient(135deg,#00ff94,#00c9ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Poly</span>
-        <span style={{ fontFamily: "Syne,sans-serif", fontSize: 30, fontWeight: 800, letterSpacing: -1, background: "linear-gradient(135deg,#7c3aed,#ec4899)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Edge</span>
-        <div style={{ fontSize: 10, color: "#6b6b8a", letterSpacing: 3, textTransform: "uppercase", marginTop: 2 }}>AI Bet Analyzer</div>
+      <div style={{ textAlign: "center", marginBottom: 20 }}>
+        <div>
+          <span style={{ fontFamily: "Syne,sans-serif", fontSize: 30, fontWeight: 800, letterSpacing: -1, background: "linear-gradient(135deg,#00ff94,#00c9ff)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Poly</span>
+          <span style={{ fontFamily: "Syne,sans-serif", fontSize: 30, fontWeight: 800, letterSpacing: -1, background: "linear-gradient(135deg,#7c3aed,#ec4899)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent" }}>Edge</span>
+        </div>
+        <div style={{ fontSize: 10, color: "#6b6b8a", letterSpacing: 3, textTransform: "uppercase", marginTop: 2 }}>Independent AI Analysis</div>
       </div>
 
-      {/* Stats */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, marginBottom: 18, background: "#12121a", border: "1px solid #2a2a3d", borderRadius: 12, padding: 12 }}>
+      {/* Global Stats */}
+      <div style={{ ...S.surface, display: "grid", gridTemplateColumns: "repeat(4,1fr)", gap: 6, marginBottom: 16, padding: 12 }}>
         {[
-          { val: stats.total, label: "Analysed", color: "#e8e8f0" },
-          { val: stats.won, label: "Won", color: "#00ff94" },
-          { val: stats.lost, label: "Lost", color: "#ef4444" },
-          { val: stats.winRate + "%", label: "Win Rate", color: stats.winRate >= 60 ? "#00ff94" : stats.winRate >= 40 ? "#f59e0b" : "#ef4444" },
+          { val: globalStats.total, label: "Analysed", color: "#e8e8f0" },
+          { val: globalStats.won, label: "AI Won", color: "#00ff94" },
+          { val: globalStats.lost, label: "AI Lost", color: "#ef4444" },
+          { val: globalStats.winRate + "%", label: "Win Rate", color: globalStats.winRate >= 60 ? "#00ff94" : globalStats.winRate >= 40 ? "#f59e0b" : "#ef4444" },
         ].map((s, i) => (
           <div key={i} style={{ textAlign: "center" }}>
             <div style={{ fontFamily: "Syne,sans-serif", fontSize: 18, fontWeight: 800, color: s.color }}>{s.val}</div>
@@ -228,73 +169,132 @@ function App() {
         ))}
       </div>
 
-      {checkingResults && <div style={{ textAlign: "center", fontSize: 10, color: "#7c3aed", letterSpacing: 2, marginBottom: 10, textTransform: "uppercase" }}>⟳ Checking bet results...</div>}
+      {checkingResults && <div style={{ textAlign: "center", fontSize: 10, color: "#7c3aed", letterSpacing: 2, marginBottom: 10, textTransform: "uppercase", animation: "pulse 1.5s infinite" }}>⟳ Auto-checking results...</div>}
 
       {/* Tabs */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 18 }}>
+      <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         <button onClick={() => setTab("scan")} style={S.tab(tab === "scan")}>🔍 Scan</button>
         <button onClick={() => setTab("history")} style={S.tab(tab === "history")}>📋 History ({history.length})</button>
       </div>
 
+      {/* SCAN TAB */}
       {tab === "scan" && <>
+        {/* Filters */}
         <div style={{ display: "flex", gap: 6, marginBottom: 14 }}>
-          {["all","strong","good","moderate"].map(f => (
-            <button key={f} onClick={() => setFilter(f)} style={S.btn(filter === f)}>{f}</button>
+          {[["all","All","#00ff94"],["strong","Strong","#00ff94"],["value","Value","#f59e0b"],["fade","Fade","#ec4899"]].map(([f, label, color]) => (
+            <button key={f} onClick={() => setFilter(f)} style={S.btn(filter === f, color)}>{label}</button>
           ))}
         </div>
 
-        <button onClick={scan} disabled={loading} style={{ width: "100%", padding: 15, background: loading ? "#1a1a26" : "linear-gradient(135deg,#7c3aed,#4f46e5)", border: "none", borderRadius: 12, color: "white", fontFamily: "Syne,sans-serif", fontSize: 15, fontWeight: 700, letterSpacing: 1, cursor: loading ? "not-allowed" : "pointer", marginBottom: 18, opacity: loading ? 0.7 : 1 }}>
-          {loading ? loadingMsg : "⚡ SCAN LIVE MARKETS"}
+        {/* Scan Button */}
+        <button onClick={scan} disabled={loading} style={{ width: "100%", padding: 15, background: loading ? "#1a1a26" : "linear-gradient(135deg,#7c3aed,#4f46e5)", border: "none", borderRadius: 12, color: "white", fontFamily: "Syne,sans-serif", fontSize: 15, fontWeight: 700, letterSpacing: 1, cursor: loading ? "not-allowed" : "pointer", marginBottom: 16, opacity: loading ? 0.8 : 1 }}>
+          {loading ? "⏳ AI ANALYZING..." : "⚡ SCAN & ANALYZE MARKETS"}
         </button>
 
-        {loading && <div style={{ textAlign: "center", padding: "20px 0" }}><div className="spinner"/><div style={{ fontSize: 11, color: "#6b6b8a", letterSpacing: 2, textTransform: "uppercase" }}>{loadingMsg}</div></div>}
-        {lastUpdated && !loading && <div style={{ textAlign: "center", fontSize: 10, color: "#6b6b8a", marginBottom: 12 }}>Updated {lastUpdated.toLocaleTimeString()} · {filtered.length} markets</div>}
+        {loading && (
+          <div style={{ textAlign: "center", padding: "20px 0" }}>
+            <div className="spinner"/>
+            <div style={{ fontSize: 11, color: "#a78bfa", letterSpacing: 1, marginBottom: 6 }}>{loadingMsg}</div>
+            <div style={{ fontSize: 10, color: "#6b6b8a" }}>Claude is searching news & cross-referencing data...</div>
+            <div style={{ fontSize: 10, color: "#6b6b8a", marginTop: 4 }}>This takes 20-40 seconds</div>
+          </div>
+        )}
+
+        {lastUpdated && !loading && <div style={{ textAlign: "center", fontSize: 10, color: "#6b6b8a", marginBottom: 12 }}>AI analyzed at {lastUpdated.toLocaleTimeString()} · {filtered.length} markets</div>}
+
         {error && <div style={{ background: "rgba(239,68,68,0.06)", border: "1px solid rgba(239,68,68,0.2)", borderRadius: 12, padding: 16, textAlign: "center", marginBottom: 14, color: "#ef4444", fontSize: 12, lineHeight: 1.7 }}>⚠️ {error}</div>}
 
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {/* Market Cards */}
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
           {filtered.map((m, i) => {
-            const lbl = getLabel(m.score);
+            const sl = getScoreLabel(m.score);
+            const el = getEdgeLabel(m.edgeType, m.edge);
+            const agreesWithCrowd = m.myFavorite === m.crowdFavorite;
             return (
-              <div key={m.id} style={{ ...S.card(lbl.color), animation: `fadeUp 0.35s ease ${i*0.04}s both` }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 8, gap: 8 }}>
-                  <span style={S.tag(lbl.color)}>{lbl.text}</span>
-                  <span style={{ fontFamily: "Syne,sans-serif", fontSize: 20, fontWeight: 800, color: lbl.color }}>{m.score}</span>
-                </div>
-                <div style={{ fontFamily: "Syne,sans-serif", fontSize: 12, fontWeight: 600, lineHeight: 1.4, marginBottom: 10 }}>{m.question}</div>
-                <div style={S.surface2}>
-                  <span style={{ fontSize: 9, color: "#6b6b8a", textTransform: "uppercase", letterSpacing: 1 }}>Bet on</span>
-                  <span style={{ fontFamily: "Syne,sans-serif", fontSize: 14, fontWeight: 700, color: "#00ff94" }}>{m.bestOutcome}</span>
-                </div>
-                <div style={{ marginBottom: 8 }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#6b6b8a", marginBottom: 4 }}>
-                    <span>Probability</span><span>{m.probability}%</span>
-                  </div>
-                  <div style={{ height: 3, background: "#2a2a3d", borderRadius: 3, overflow: "hidden" }}>
-                    <div style={{ height: "100%", width: `${m.probability}%`, background: `linear-gradient(90deg,#7c3aed,${lbl.color})`, borderRadius: 3 }}/>
+              <div key={i} style={{ background: "#12121a", border: `1px solid #2a2a3d`, borderLeft: `3px solid ${sl.color}`, borderRadius: 14, padding: 16, animation: `fadeUp 0.35s ease ${i*0.05}s both` }}>
+
+                {/* Top row */}
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10, gap: 8 }}>
+                  <span style={S.tag(sl.color)}>{sl.text}</span>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                    <span style={{ ...S.tag(el.color) }}>{el.text}</span>
+                    <span style={{ fontFamily: "Syne,sans-serif", fontSize: 22, fontWeight: 800, color: sl.color }}>{m.score}</span>
                   </div>
                 </div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 10 }}>
-                  {m.flags.map((f,j) => <span key={j} style={S.signal}>{f}</span>)}
+
+                {/* Question */}
+                <div style={{ fontFamily: "Syne,sans-serif", fontSize: 12, fontWeight: 600, lineHeight: 1.4, marginBottom: 12 }}>{m.question}</div>
+
+                {/* Crowd vs AI comparison */}
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 12 }}>
+                  <div style={{ background: "#1a1a26", borderRadius: 8, padding: "10px 10px" }}>
+                    <div style={{ fontSize: 9, color: "#6b6b8a", letterSpacing: 1, textTransform: "uppercase", marginBottom: 4 }}>👥 Crowd Says</div>
+                    <div style={{ fontFamily: "Syne,sans-serif", fontSize: 13, fontWeight: 700, color: "#6b6b8a" }}>{m.crowdFavorite}</div>
+                    <div style={{ fontSize: 10, color: "#6b6b8a", marginTop: 2 }}>{m.crowdConfidence}% confidence</div>
+                  </div>
+                  <div style={{ background: agreesWithCrowd ? "rgba(0,255,148,0.05)" : "rgba(236,72,153,0.05)", border: `1px solid ${agreesWithCrowd ? "rgba(0,255,148,0.2)" : "rgba(236,72,153,0.2)"}`, borderRadius: 8, padding: "10px 10px" }}>
+                    <div style={{ fontSize: 9, color: "#a78bfa", letterSpacing: 1, textTransform: "uppercase", marginBottom: 4 }}>🤖 AI Says</div>
+                    <div style={{ fontFamily: "Syne,sans-serif", fontSize: 13, fontWeight: 700, color: agreesWithCrowd ? "#00ff94" : "#ec4899" }}>{m.myFavorite}</div>
+                    <div style={{ fontSize: 10, color: "#a78bfa", marginTop: 2 }}>{m.myConfidence}% confidence</div>
+                  </div>
                 </div>
+
+                {/* Edge bar */}
+                {m.edge !== 0 && (
+                  <div style={{ marginBottom: 10 }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 9, color: "#6b6b8a", marginBottom: 4 }}>
+                      <span>Edge vs crowd</span>
+                      <span style={{ color: m.edge > 0 ? "#00ff94" : "#ec4899" }}>{m.edge > 0 ? "+" : ""}{m.edge}%</span>
+                    </div>
+                    <div style={{ height: 3, background: "#2a2a3d", borderRadius: 3, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${Math.min(Math.abs(m.edge), 50) * 2}%`, background: m.edge > 0 ? "#00ff94" : "#ec4899", borderRadius: 3 }}/>
+                    </div>
+                  </div>
+                )}
+
+                {/* AI Reasoning */}
+                <div style={{ background: "rgba(124,58,237,0.06)", border: "1px solid rgba(124,58,237,0.15)", borderRadius: 8, padding: "10px 12px", marginBottom: 10, borderLeft: "2px solid #7c3aed" }}>
+                  <div style={{ fontSize: 9, color: "#7c3aed", letterSpacing: 1, textTransform: "uppercase", marginBottom: 4 }}>🧠 AI Analysis</div>
+                  <div style={{ fontSize: 11, color: "#c4b5fd", lineHeight: 1.6 }}>{m.reasoning}</div>
+                </div>
+
+                {/* Signals */}
+                {m.flags?.length > 0 && (
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 5, marginBottom: 10 }}>
+                    {m.flags.map((f, j) => <span key={j} style={{ fontSize: 9, padding: "2px 7px", background: "rgba(124,58,237,0.1)", border: "1px solid rgba(124,58,237,0.2)", borderRadius: 20, color: "#a78bfa" }}>{f}</span>)}
+                  </div>
+                )}
+
                 <a href={`https://polymarket.com/event/${m.slug}`} target="_blank" rel="noreferrer" style={S.link}>View on Polymarket →</a>
               </div>
             );
           })}
         </div>
+
         {markets.length > 0 && filtered.length === 0 && <div style={{ textAlign: "center", padding: 40, color: "#6b6b8a", fontSize: 12 }}>No markets match this filter.</div>}
+
+        {markets.length === 0 && !loading && !error && (
+          <div style={{ textAlign: "center", padding: 48, color: "#6b6b8a", fontSize: 12, lineHeight: 2 }}>
+            Tap Scan to start<br/>
+            <span style={{ fontSize: 10 }}>AI will search news & analyze each market independently</span>
+          </div>
+        )}
       </>}
 
+      {/* HISTORY TAB */}
       {tab === "history" && <>
-        {history.length > 0 && <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
-          <button onClick={clearHistory} style={{ background: "transparent", border: "1px solid #2a2a3d", color: "#6b6b8a", fontSize: 10, padding: "5px 12px", borderRadius: 6, cursor: "pointer", fontFamily: "DM Mono,monospace" }}>Clear History</button>
-        </div>}
+        {history.length > 0 && (
+          <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+            <button onClick={() => { if(window.confirm("Clear all history?")) { setHistory([]); saveHistory([]); } }} style={{ background: "transparent", border: "1px solid #2a2a3d", color: "#6b6b8a", fontSize: 10, padding: "5px 12px", borderRadius: 6, cursor: "pointer", fontFamily: "DM Mono,monospace" }}>Clear History</button>
+          </div>
+        )}
         {history.length === 0
           ? <div style={{ textAlign: "center", padding: 60, color: "#6b6b8a", fontSize: 12, lineHeight: 2 }}>No history yet.<br/>Run a scan to start tracking.</div>
           : <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {history.map((h, i) => {
-                const lbl = getLabel(h.score);
                 const rc = h.result === "won" ? "#00ff94" : h.result === "lost" ? "#ef4444" : "#6b6b8a";
                 const ri = h.result === "won" ? "✓ WON" : h.result === "lost" ? "✗ LOST" : "⏳ PENDING";
+                const sl = getScoreLabel(h.score || 50);
                 return (
                   <div key={i} style={{ background: "#12121a", border: `1px solid ${h.result === "won" ? "rgba(0,255,148,0.2)" : h.result === "lost" ? "rgba(239,68,68,0.2)" : "#2a2a3d"}`, borderLeft: `3px solid ${rc}`, borderRadius: 12, padding: 14 }}>
                     <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
@@ -302,12 +302,13 @@ function App() {
                       <span style={{ fontSize: 9, color: "#6b6b8a" }}>{new Date(h.scannedAt).toLocaleDateString()}</span>
                     </div>
                     <div style={{ fontFamily: "Syne,sans-serif", fontSize: 11, fontWeight: 600, lineHeight: 1.4, marginBottom: 8 }}>{h.question}</div>
-                    <div style={{ display: "flex", justifyContent: "space-between", fontSize: 10, color: "#6b6b8a", marginBottom: 4 }}>
-                      <span>Predicted: <span style={{ color: "#00ff94" }}>{h.bestOutcome}</span></span>
-                      <span>Score: <span style={{ color: lbl.color }}>{h.score}</span></span>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6, marginBottom: 8 }}>
+                      <div style={{ fontSize: 10, color: "#6b6b8a" }}>👥 Crowd: <span style={{ color: "#6b6b8a" }}>{h.crowdFavorite} ({h.crowdConfidence}%)</span></div>
+                      <div style={{ fontSize: 10, color: "#6b6b8a" }}>🤖 AI: <span style={{ color: "#a78bfa" }}>{h.myFavorite} ({h.myConfidence}%)</span></div>
                     </div>
                     {h.result !== "pending" && h.winner && <div style={{ fontSize: 10, color: "#6b6b8a", marginBottom: 6 }}>Actual: <span style={{ color: rc }}>{h.winner}</span></div>}
-                    <a href={`https://polymarket.com/event/${h.slug}`} target="_blank" rel="noreferrer" style={{ ...S.link, marginTop: 8, fontSize: 9 }}>View Market →</a>
+                    {h.reasoning && <div style={{ fontSize: 10, color: "#6b6b8a", lineHeight: 1.5, marginBottom: 8, fontStyle: "italic" }}>{h.reasoning}</div>}
+                    <a href={`https://polymarket.com/event/${h.slug}`} target="_blank" rel="noreferrer" style={{ ...S.link, fontSize: 9 }}>View Market →</a>
                   </div>
                 );
               })}
@@ -316,7 +317,7 @@ function App() {
       </>}
 
       <div style={{ marginTop: 24, padding: 10, textAlign: "center", fontSize: 9, color: "#3a3a55", letterSpacing: 1, lineHeight: 1.8 }}>
-        DATA FROM POLYMARKET · NOT FINANCIAL ADVICE<br/>NEVER BET MORE THAN YOU CAN AFFORD TO LOSE
+        AI ANALYSIS · NOT FINANCIAL ADVICE<br/>NEVER BET MORE THAN YOU CAN AFFORD TO LOSE
       </div>
     </div>
   );
